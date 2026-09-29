@@ -5,5 +5,12 @@
     "date": "OCTOBER 2026",
     "tags": ["#GODOT-4", "#GLSL", "#RAYCASTING"],
     "imageUrl": "https://magicoloriage.com/wp-content/uploads/2025/06/Pixel-art-recreez-un-bol-de-nouilles-kawaii-souriant.jpeg"
+  },
+  {
+    "title": "The Top-Down Dungeon Crawler",
+    "desc": "",
+    "date": "OCTOBER 2026",
+    "tags": ["#GODOT-4", "#GLSL", "#RAYCASTING"],
+    "imageUrl": "/apple-001.png"
   }
 ]

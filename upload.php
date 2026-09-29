@@ -35,6 +35,71 @@ $ALLOWED_MIME = [
 // server's own CEST clock and independent of the visitor's browser tz.
 $DEFAULT_TZ = 'Asia/Jakarta';
 
+/**
+ * Turn a timeline "date" string into a sortable timestamp.
+ *
+ * Accepts the formats that actually show up in the JSON:
+ *   "20 SEPTEMBER 2026"  -> full date
+ *   "OCTOBER 2026"       -> month + year (day assumed as the 1st)
+ *   "2026-09-20"         -> ISO, just in case
+ *
+ * Returns 0 for anything unparseable so those entries sink to the bottom
+ * instead of poisoning the ordering.
+ */
+function timeline_date_value($raw) {
+    $s = strtoupper(trim((string)$raw));
+    if ($s === '') return 0;
+
+    // "20 SEPTEMBER 2026" / "20 SEPT 2026" / "1 SEPTEMBER 2026"
+    if (preg_match('/^(\d{1,2})\s+([A-Z]{3,})\s+(\d{4})$/', $s, $m)) {
+        $ts = DateTime::createFromFormat('j F Y', $m[1] . ' ' . $m[2] . ' ' . $m[3], new DateTimeZone('UTC'));
+        if ($ts !== false) return $ts->getTimestamp();
+        $ts = DateTime::createFromFormat('j M Y', $m[1] . ' ' . $m[2] . ' ' . $m[3], new DateTimeZone('UTC'));
+        if ($ts !== false) return $ts->getTimestamp();
+    }
+
+    // "OCTOBER 2026" -> assume the 1st of the month
+    if (preg_match('/^([A-Z]{3,})\s+(\d{4})$/', $s, $m)) {
+        $ts = DateTime::createFromFormat('F Y j', $m[1] . ' ' . $m[2] . ' 1', new DateTimeZone('UTC'));
+        if ($ts !== false) return $ts->getTimestamp();
+        $ts = DateTime::createFromFormat('M Y j', $m[1] . ' ' . $m[2] . ' 1', new DateTimeZone('UTC'));
+        if ($ts !== false) return $ts->getTimestamp();
+    }
+
+    // "2026-09-20" or "2026/09/20"
+    if (preg_match('#^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$#', $s, $m)) {
+        $ts = DateTime::createFromFormat('Y-n-j', $m[1] . '-' . $m[2] . '-' . $m[3], new DateTimeZone('UTC'));
+        if ($ts !== false) return $ts->getTimestamp();
+    }
+
+    return 0;
+}
+
+/**
+ * Newest first. Ties keep their existing relative order (PHP's usort has
+ * been stable since 8.0), so equal dates don't shuffle around on every save.
+ * Entries with no parsable date always land at the very bottom.
+ */
+function timeline_sort_desc(&$data) {
+    // Decorate with the original index so we can break ties manually and
+    // stay deterministic even on PHP < 8.
+    $decorated = [];
+    foreach ($data as $i => $item) {
+        $decorated[] = [
+            'value' => timeline_date_value(is_array($item) ? ($item['date'] ?? '') : ''),
+            'index' => $i,
+            'item'  => $item,
+        ];
+    }
+
+    usort($decorated, function ($a, $b) {
+        if ($a['value'] === $b['value']) return $a['index'] <=> $b['index'];
+        return $b['value'] <=> $a['value']; // descending
+    });
+
+    $data = array_column($decorated, 'item');
+}
+
 // ── STATE ───────────────────────────────────────────────────────────────
 $errors  = [];
 $success = false;
@@ -112,13 +177,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ];
 
             // Append to timeline.json with an exclusive lock so concurrent
-            // uploads can't clobber each other.
+            // uploads can't clobber each other. The whole list is re-sorted
+            // newest-first on every write, which both puts the new entry on
+            // top and repairs any hand-edited/unsorted legacy data.
             $fp = fopen($JSON_FILE, 'c+');
             if ($fp && flock($fp, LOCK_EX)) {
                 $content = stream_get_contents($fp);
                 $data = json_decode(trim($content) === '' ? '[]' : $content, true);
                 if (!is_array($data)) $data = [];
                 $data[] = $entry;
+                timeline_sort_desc($data);
 
                 ftruncate($fp, 0);
                 rewind($fp);
